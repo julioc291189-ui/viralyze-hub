@@ -6,8 +6,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 COOKIES_FILE = "cookies.json"
 LOGIN_URL = "https://viralyze.site/login.html?reason=login&next=%2Fdashboard.html"
@@ -34,65 +32,64 @@ def get_driver():
     return webdriver.Chrome(options=options)
 
 def execute_login(driver, email, password):
-    """Injeta credenciais diretamente no DOM via JavaScript e submete."""
+    """Preenche os campos de email e senha e clica em Entrar."""
     print(f"[Robô] Acessando {LOGIN_URL}...")
     driver.get(LOGIN_URL)
-    
-    wait = WebDriverWait(driver, 15)
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "input")))
-    time.sleep(3)
+    time.sleep(4)
 
-    # Injeção direta de JavaScript para preencher e clicar no botão
-    driver.execute_script("""
-        var userEmail = arguments[0];
-        var userPass = arguments;
-        
-        var inputs = Array.from(document.querySelectorAll('input')).filter(i => i.type !== 'hidden');
-        var emailInput = document.querySelector('input[type="email"]') || inputs[0];
-        var passInput = document.querySelector('input[type="password"]') || inputs;
-        
-        if (emailInput) {
-            emailInput.focus();
-            emailInput.value = userEmail;
-            emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-            emailInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        
-        if (passInput) {
-            passInput.focus();
-            passInput.value = userPass;
-            passInput.dispatchEvent(new Event('input', { bubbles: true }));
-            passInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        
-        var allButtons = Array.from(document.querySelectorAll('button, input[type="submit"], a, div'));
-        var btn = allButtons.find(b => b.innerText && b.innerText.trim().toLowerCase() === 'entrar');
-        if (btn) {
-            btn.click();
-        } else {
-            var form = document.querySelector('form');
-            if (form) form.submit();
-        }
-    """, email, password)
+    # 1. Procura campos de email e senha
+    email_elem = None
+    pass_elem = None
 
-    try:
-        inputs = driver.find_elements(By.TAG_NAME, "input")
-        if len(inputs) > 1:
-            inputs.send_keys(Keys.RETURN)
-    except:
-        pass
+    for el in driver.find_elements(By.TAG_NAME, "input"):
+        t = (el.get_attribute("type") or "").lower()
+        p = (el.get_attribute("placeholder") or "").lower()
+        if not email_elem and (t in ["email", "text"] or "email" in p):
+            email_elem = el
+        elif not pass_elem and (t == "password" or "senha" in p):
+            pass_elem = el
 
-    print("[Robô] Login submetido via JS. Aguardando Dashboard...")
-    time.sleep(8)
+    # Fallback por posição se não identificou pelos atributos
+    if not email_elem or not pass_elem:
+        inputs = [i for i in driver.find_elements(By.TAG_NAME, "input") if i.is_displayed()]
+        if len(inputs) >= 2:
+            email_elem = inputs[0]
+            pass_elem = inputs
 
-    # Salva cookies
-    try:
-        cookies = driver.get_cookies()
-        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-            json.dump(cookies, f)
-        print("[Robô] Cookies salvos.")
-    except Exception as e:
-        print(f"[Robô] Erro cookies: {e}")
+    if email_elem and pass_elem:
+        print("[Robô] Digitando credenciais...")
+        email_elem.click()
+        email_elem.clear()
+        email_elem.send_keys(email)
+        time.sleep(1)
+
+        pass_elem.click()
+        pass_elem.clear()
+        pass_elem.send_keys(password)
+        time.sleep(1)
+
+        # Clica no botão Entrar
+        clicked = False
+        for btn in driver.find_elements(By.XPATH, "//*[contains(translate(text(), 'ENTRAR', 'entrar'), 'entrar')]"):
+            if btn.is_displayed():
+                driver.execute_script("arguments[0].click();", btn)
+                clicked = True
+                break
+
+        if not clicked:
+            pass_elem.send_keys(Keys.ENTER)
+
+        print("[Robô] Login submetido! Aguardando Dashboard...")
+        time.sleep(10)
+
+        # Salva cookies da sessão
+        try:
+            cookies = driver.get_cookies()
+            with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+                json.dump(cookies, f)
+            print("[Robô] Cookies salvos com sucesso.")
+        except Exception as e:
+            print(f"[Robô] Erro cookies: {e}")
 
 def scrape(email=None, password=None):
     driver = get_driver()
@@ -100,7 +97,7 @@ def scrape(email=None, password=None):
     debug_info = {"url": "", "title": "", "body": "", "error": ""}
     
     try:
-        # 1. Injeta cookies salvos
+        # Injeta cookies salvos se existirem
         if os.path.exists(COOKIES_FILE):
             try:
                 driver.get("https://viralyze.site")
