@@ -31,15 +31,16 @@ def get_driver():
     return webdriver.Chrome(options=options)
 
 def scrape(email=None, password=None):
-    driver = get_driver()
     results = []
-    debug_info = {}
+    debug_info = {"url": "", "title": "", "body": "", "error": ""}
+    driver = None
     try:
+        driver = get_driver()
         print(f"[Robô] Acessando {DASHBOARD_URL}...")
         driver.get(DASHBOARD_URL)
         time.sleep(3)
 
-        # 1. Injeta cookies se existirem
+        # Injeta cookies salvos
         if os.path.exists(COOKIES_FILE):
             try:
                 with open(COOKIES_FILE, "r", encoding="utf-8") as f:
@@ -51,7 +52,7 @@ def scrape(email=None, password=None):
             except Exception as e:
                 print(f"[Robô] Erro cookies: {e}")
 
-        # 2. Se não estiver no dashboard, tenta fazer o login
+        # Se não estiver no dashboard, faz login
         if "dashboard" not in driver.current_url.lower():
             driver.get(BASE_URL)
             time.sleep(3)
@@ -83,16 +84,16 @@ def scrape(email=None, password=None):
                 driver.get(DASHBOARD_URL)
                 time.sleep(5)
 
-        # Tira print de diagnóstico da tela
-        driver.save_screenshot("debug_screen.png")
+        # Informações de diagnóstico
         debug_info["url"] = driver.current_url
         debug_info["title"] = driver.title
+        driver.save_screenshot("debug_screen.png")
         try:
             debug_info["body"] = driver.find_element(By.TAG_NAME, "body").text[:800]
         except:
             debug_info["body"] = "Sem texto capturado."
 
-        # Extrai os cards / tabelas
+        # Extração dos cards
         selectors = [
             'tbody tr',
             '.product-card',
@@ -141,8 +142,12 @@ def scrape(email=None, password=None):
                 "score_ia": 8.5
             })
 
+    except Exception as e:
+        debug_info["error"] = str(e)
+        print(f"[Erro no Scraper] {e}")
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
 
     return results, debug_info
     
