@@ -1,88 +1,107 @@
 import os
 import json
-import asyncio
-from playwright.async_api import async_playwright
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 
 COOKIES_FILE = "cookies.json"
 BASE_URL = "https://viralyze.site"
 DASHBOARD_URL = "https://viralyze.site/dashboard.html"
 
-def install_playwright_browsers():
-    """Garante o download do Chromium no servidor Linux do Streamlit."""
-    os.system("playwright install chromium")
+def get_driver():
+    """Inicializa o Chromium nativo do servidor Streamlit."""
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-async def login_and_save_cookies(page, email, password):
-    """Realiza login no site e salva os cookies localmente."""
-    print("[Robô] Acessando página de login...")
-    await page.goto(BASE_URL, wait_until="networkidle")
+    # Localização do Chromium no servidor Linux
+    if os.path.exists("/usr/bin/chromium"):
+        options.binary_location = "/usr/bin/chromium"
+    elif os.path.exists("/usr/bin/chromium-browser"):
+        options.binary_location = "/usr/bin/chromium-browser"
+
+    if os.path.exists("/usr/bin/chromedriver"):
+        service = Service("/usr/bin/chromedriver")
+        return webdriver.Chrome(service=service, options=options)
     
-    await page.fill('input[type="email"], input[name="email"]', email)
-    await page.fill('input[type="password"], input[name="password"]', password)
-    
-    await page.click('button[type="submit"], input[type="submit"], button:has-text("Entrar"), button:has-text("Login")')
-    await page.wait_for_url("**/dashboard.html*", timeout=15000)
-    
-    cookies = await page.context.cookies()
+    return webdriver.Chrome(options=options)
+
+def login_and_save_cookies(driver, email, password):
+    """Realiza login no Viralyze e salva os cookies."""
+    print("[Robô] Acessando tela de login...")
+    driver.get(BASE_URL)
+    time.sleep(3)
+
+    # Preenche e-mail e senha
+    email_input = driver.find_element(By.CSS_SELECTOR, 'input[type="email"], input[name="email"], input[placeholder*="email" i]')
+    email_input.clear()
+    email_input.send_keys(email)
+
+    pass_input = driver.find_element(By.CSS_SELECTOR, 'input[type="password"], input[name="password"]')
+    pass_input.clear()
+    pass_input.send_keys(password)
+
+    # Clica no botão de entrar
+    submit_btn = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"], button')
+    submit_btn.click()
+
+    time.sleep(5)
+
+    # Salva cookies
+    cookies = driver.get_cookies()
     with open(COOKIES_FILE, "w", encoding="utf-8") as f:
         json.dump(cookies, f)
-    print("[Robô] Login realizado com sucesso! Cookies salvos.")
+    print("[Robô] Login realizado e cookies salvos.")
 
-async def run_viralyze_scraper(email: str = None, password: str = None, headless: bool = True):
-    """Executa a raspagem dos produtos em alta no Viralyze."""
-    install_playwright_browsers()
-    
+def scrape(email=None, password=None):
+    """Executa a raspagem com Selenium."""
+    driver = get_driver()
     results = []
-    async with async_playwright() as p:
-        # Flags essenciais para rodar no servidor Linux do Streamlit
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--single-process"
-            ]
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+    try:
+        driver.get(DASHBOARD_URL)
+        time.sleep(3)
 
-        # 1. Tenta carregar cookies salvos
+        # 1. Injeta cookies se existirem
         if os.path.exists(COOKIES_FILE):
             try:
                 with open(COOKIES_FILE, "r", encoding="utf-8") as f:
                     cookies = json.load(f)
-                    await context.add_cookies(cookies)
-                print("[Robô] Cookies carregados com sucesso.")
+                    for c in cookies:
+                        driver.add_cookie(c)
+                driver.get(DASHBOARD_URL)
+                time.sleep(3)
             except Exception as e:
                 print(f"[Robô] Erro ao carregar cookies: {e}")
 
-        page = await context.new_page()
-
-        # 2. Navega até o dashboard
-        print(f"[Robô] Acessando {DASHBOARD_URL}...")
-        await page.goto(DASHBOARD_URL, wait_until="networkidle")
-
-        # Se foi redirecionado para a tela de login, refaz o login
-        if "dashboard" not in page.url:
+        # Se não estiver no dashboard, faz login com credenciais
+        if "dashboard" not in driver.current_url.lower():
             if not email or not password:
-                await browser.close()
                 raise ValueError("Preencha seu E-mail e Senha do Viralyze nos campos acima para o primeiro acesso.")
-            await login_and_save_cookies(page, email, password)
-            await page.goto(DASHBOARD_URL, wait_until="networkidle")
+            login_and_save_cookies(driver, email, password)
+            driver.get(DASHBOARD_URL)
+            time.sleep(3)
 
-        # 3. Extração dos cards de produtos
-        await page.wait_for_timeout(3000)
-        cards = await page.query_selector_all('.product-card, .video-card, tr, .card, div[data-product]')
+        # 2. Extrai os cards de produtos
+        cards = driver.find_elements(By.CSS_SELECTOR, '.product-card, .video-card, tr, .card, div[data-product]')
         
         for idx, card in enumerate(cards):
-            text_content = await card.inner_text()
+            text_content = card.text
             if not text_content or len(text_content.strip()) < 10:
                 continue
 
-            video_link_elem = await card.query_selector('a[href*="tiktok"], a[href*="video"]')
-            video_url = await video_link_elem.get_attribute("href") if video_link_elem else ""
+            links = card.find_elements(By.TAG_NAME, 'a')
+            video_url = ""
+            for link in links:
+                href = link.get_attribute("href") or ""
+                if "tiktok" in href or "video" in href:
+                    video_url = href
+                    break
 
             categoria = "Outros"
             text_lower = text_content.lower()
@@ -101,10 +120,8 @@ async def run_viralyze_scraper(email: str = None, password: str = None, headless
                 "score_ia": 8.5
             })
 
-        await browser.close()
-        
-    return results
+    finally:
+        driver.quit()
 
-def scrape(email=None, password=None):
-    return asyncio.run(run_viralyze_scraper(email, password))
+    return results
     
