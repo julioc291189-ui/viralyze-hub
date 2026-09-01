@@ -33,12 +33,28 @@ def get_driver():
     
     return webdriver.Chrome(options=options)
 
+def fill_input(driver, element, value):
+    """Preenche o campo garantindo que eventos do React/Vue sejam disparados."""
+    try:
+        element.click()
+        element.clear()
+        element.send_keys(value)
+    except:
+        pass
+    # Injeta via JS caso seja campo controlado por framework
+    driver.execute_script("""
+        var el = arguments[0];
+        var val = arguments;
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    """, element, value)
+
 def execute_login(driver, email, password):
-    """Acessa a URL direta de login, aguarda os campos e clica no botão Entrar."""
+    """Acessa a tela de login, preenche os dados e clica em Entrar."""
     print(f"[Robô] Acessando {LOGIN_URL}...")
     driver.get(LOGIN_URL)
     
-    # Aguarda os campos de input estarem visíveis na tela
     wait = WebDriverWait(driver, 15)
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "input")))
     time.sleep(2)
@@ -65,18 +81,13 @@ def execute_login(driver, email, password):
         pass_elem = visible_inputs
 
     if email_elem and pass_elem:
-        print("[Robô] Digitando credenciais...")
-        email_elem.click()
-        email_elem.clear()
-        email_elem.send_keys(email)
+        print("[Robô] Preenchendo credenciais...")
+        fill_input(driver, email_elem, email)
+        time.sleep(0.5)
+        fill_input(driver, pass_elem, password)
         time.sleep(0.5)
 
-        pass_elem.click()
-        pass_elem.clear()
-        pass_elem.send_keys(password)
-        time.sleep(0.5)
-
-        # Clica no botão verde 'Entrar'
+        # Clica no botão 'Entrar'
         clicked = False
         buttons = driver.find_elements(By.XPATH, "//*[translate(normalize-space(text()), 'ENTRAR', 'entrar') = 'entrar']")
         for btn in buttons:
@@ -88,14 +99,14 @@ def execute_login(driver, email, password):
         if not clicked:
             pass_elem.send_keys(Keys.RETURN)
 
-        print("[Robô] Login submetido. Aguardando carregamento do Dashboard...")
-        time.sleep(7)
+        print("[Robô] Login submetido. Aguardando Dashboard...")
+        time.sleep(8)
 
-        # Salva cookies da sessão autenticada
+        # Salva cookies
         cookies = driver.get_cookies()
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
             json.dump(cookies, f)
-        print("[Robô] Cookies de sessão salvos com sucesso.")
+        print("[Robô] Cookies salvos.")
 
 def scrape(email=None, password=None):
     driver = get_driver()
@@ -103,7 +114,7 @@ def scrape(email=None, password=None):
     debug_info = {"url": "", "title": "", "body": "", "error": ""}
     
     try:
-        # 1. Injeta cookies salvos se existirem
+        # Injeta cookies salvos se existirem
         if os.path.exists(COOKIES_FILE):
             try:
                 driver.get("https://viralyze.site")
@@ -119,15 +130,16 @@ def scrape(email=None, password=None):
             driver.get(LOGIN_URL)
             time.sleep(3)
 
-        # Se não estiver no dashboard, executa o login
+        # Se ainda estiver na tela de login, faz o login
         if "dashboard" not in driver.current_url.lower():
             if not email or not password:
                 raise ValueError("Preencha seu e-mail e senha do Viralyze nos campos acima.")
             execute_login(driver, email, password)
-            driver.get(DASHBOARD_URL)
-            time.sleep(6)
+            if "dashboard" not in driver.current_url.lower():
+                driver.get(DASHBOARD_URL)
+                time.sleep(6)
 
-        # Salva captura da tela pós-login
+        # Captura de tela pós-login
         driver.save_screenshot("debug_screen.png")
         debug_info["url"] = driver.current_url
         debug_info["title"] = driver.title
@@ -136,7 +148,7 @@ def scrape(email=None, password=None):
         except:
             debug_info["body"] = "Sem texto capturado."
 
-        # Extrai os produtos/vídeos do Dashboard
+        # Extrai os cards de produtos do Dashboard
         selectors = [
             'tbody tr',
             '.product-card',
@@ -193,4 +205,4 @@ def scrape(email=None, password=None):
             driver.quit()
 
     return results, debug_info
-    
+                
