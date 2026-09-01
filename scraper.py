@@ -11,7 +11,6 @@ BASE_URL = "https://viralyze.site"
 DASHBOARD_URL = "https://viralyze.site/dashboard.html"
 
 def get_driver():
-    """Inicializa o Chromium nativo do servidor Streamlit."""
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -31,65 +30,16 @@ def get_driver():
     
     return webdriver.Chrome(options=options)
 
-def login_and_save_cookies(driver, email, password):
-    """Realiza login no Viralyze e salva os cookies."""
-    print(f"[Robô] Acessando {BASE_URL} para login...")
-    driver.get(BASE_URL)
-    time.sleep(4)
-
-    try:
-        inputs = driver.find_elements(By.TAG_NAME, "input")
-        email_field = None
-        pass_field = None
-        
-        for inp in inputs:
-            inp_type = (inp.get_attribute("type") or "").lower()
-            inp_name = (inp.get_attribute("name") or "").lower()
-            inp_placeholder = (inp.get_attribute("placeholder") or "").lower()
-            
-            if not email_field and (inp_type == "email" or "email" in inp_name or "email" in inp_placeholder or inp_type == "text"):
-                email_field = inp
-            elif not pass_field and (inp_type == "password" or "pass" in inp_name or "senha" in inp_placeholder):
-                pass_field = inp
-
-        if email_field and pass_field:
-            email_field.clear()
-            email_field.send_keys(email)
-            pass_field.clear()
-            pass_field.send_keys(password)
-            
-            buttons = driver.find_elements(By.TAG_NAME, "button")
-            clicked = False
-            for btn in buttons:
-                txt = btn.text.lower()
-                if any(w in txt for w in ["entrar", "login", "acessar", "submit"]):
-                    btn.click()
-                    clicked = True
-                    break
-            if not clicked and buttons:
-                buttons[0].click()
-            elif not clicked:
-                pass_field.submit()
-            
-            time.sleep(6)
-            
-            cookies = driver.get_cookies()
-            with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-                json.dump(cookies, f)
-            print("[Robô] Login executado e cookies salvos.")
-    except Exception as e:
-        print(f"[Robô] Erro durante o login: {e}")
-
 def scrape(email=None, password=None):
-    """Executa a raspagem com Selenium e seletores abrangentes."""
     driver = get_driver()
     results = []
+    debug_info = {}
     try:
         print(f"[Robô] Acessando {DASHBOARD_URL}...")
         driver.get(DASHBOARD_URL)
-        time.sleep(4)
+        time.sleep(3)
 
-        # 1. Injeta cookies salvos
+        # 1. Injeta cookies se existirem
         if os.path.exists(COOKIES_FILE):
             try:
                 with open(COOKIES_FILE, "r", encoding="utf-8") as f:
@@ -97,23 +47,52 @@ def scrape(email=None, password=None):
                     for c in cookies:
                         driver.add_cookie(c)
                 driver.get(DASHBOARD_URL)
-                time.sleep(4)
+                time.sleep(3)
             except Exception as e:
-                print(f"[Robô] Erro ao carregar cookies: {e}")
+                print(f"[Robô] Erro cookies: {e}")
 
-        # Se for redirecionado para a tela de login
-        current_url = driver.current_url.lower()
-        if "dashboard" not in current_url:
-            if not email or not password:
-                raise ValueError("Preencha seu E-mail e Senha no painel para realizar o login.")
-            login_and_save_cookies(driver, email, password)
-            driver.get(DASHBOARD_URL)
-            time.sleep(6)
+        # 2. Se não estiver no dashboard, tenta fazer o login
+        if "dashboard" not in driver.current_url.lower():
+            driver.get(BASE_URL)
+            time.sleep(3)
+            
+            if email and password:
+                inputs = driver.find_elements(By.TAG_NAME, "input")
+                for inp in inputs:
+                    t = (inp.get_attribute("type") or "").lower()
+                    n = (inp.get_attribute("name") or "").lower()
+                    if t == "email" or "email" in n or t == "text":
+                        inp.clear()
+                        inp.send_keys(email)
+                    elif t == "password" or "pass" in n or "senha" in n:
+                        inp.clear()
+                        inp.send_keys(password)
+                
+                buttons = driver.find_elements(By.TAG_NAME, "button")
+                for btn in buttons:
+                    txt = btn.text.lower()
+                    if any(w in txt for w in ["entrar", "login", "acessar", "submit"]):
+                        btn.click()
+                        break
+                time.sleep(5)
+                
+                cookies = driver.get_cookies()
+                with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cookies, f)
+                
+                driver.get(DASHBOARD_URL)
+                time.sleep(5)
 
-        # Aguarda renderização completa do JavaScript
-        time.sleep(6)
-        
-        # 2. Busca por diferentes estruturas possíveis (tabelas, cards, grids)
+        # Tira print de diagnóstico da tela
+        driver.save_screenshot("debug_screen.png")
+        debug_info["url"] = driver.current_url
+        debug_info["title"] = driver.title
+        try:
+            debug_info["body"] = driver.find_element(By.TAG_NAME, "body").text[:800]
+        except:
+            debug_info["body"] = "Sem texto capturado."
+
+        # Extrai os cards / tabelas
         selectors = [
             'tbody tr',
             '.product-card',
@@ -147,9 +126,9 @@ def scrape(email=None, password=None):
 
             categoria = "Outros"
             text_lower = text_content.lower()
-            if any(w in text_lower for w in ["vestido", "calça", "conjunto", "moda", "feminina", "look", "cropped", "saia", "blusa"]):
+            if any(w in text_lower for w in ["vestido", "calça", "conjunto", "moda", "feminina", "look", "cropped"]):
                 categoria = "Moda Feminina"
-            elif any(w in text_lower for w in ["casa", "cozinha", "limpeza", "organizador", "achadinho", "luminária", "quarto", "banheiro"]):
+            elif any(w in text_lower for w in ["casa", "cozinha", "limpeza", "organizador", "achadinho", "luminária"]):
                 categoria = "Achadinhos para Casa"
 
             results.append({
@@ -165,4 +144,5 @@ def scrape(email=None, password=None):
     finally:
         driver.quit()
 
-    return results
+    return results, debug_info
+    
