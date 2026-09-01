@@ -6,9 +6,11 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 COOKIES_FILE = "cookies.json"
-BASE_URL = "https://viralyze.site"
+LOGIN_URL = "https://viralyze.site/login.html?reason=login&next=%2Fdashboard.html"
 DASHBOARD_URL = "https://viralyze.site/dashboard.html"
 
 def get_driver():
@@ -32,39 +34,51 @@ def get_driver():
     return webdriver.Chrome(options=options)
 
 def execute_login(driver, email, password):
-    """Preenche os campos exatos do Viralyze e clica no botão Entrar."""
-    print(f"[Robô] Executando login com e-mail: {email}...")
+    """Acessa a URL direta de login, aguarda os campos e clica no botão Entrar."""
+    print(f"[Robô] Acessando {LOGIN_URL}...")
+    driver.get(LOGIN_URL)
     
-    # 1. Localiza campo de e-mail
-    email_input = None
-    for sel in ['input[type="email"]', 'input[placeholder*="email" i]', 'input[placeholder*="Digite seu email" i]']:
-        elems = driver.find_elements(By.CSS_SELECTOR, sel)
-        if elems and elems[0].is_displayed():
-            email_input = elems[0]
-            break
+    # Aguarda os campos de input estarem visíveis na tela
+    wait = WebDriverWait(driver, 15)
+    wait.until(EC.presence_of_element_located((By.TAG_NAME, "input")))
+    time.sleep(2)
+
+    all_inputs = driver.find_elements(By.TAG_NAME, "input")
+    visible_inputs = [inp for inp in all_inputs if inp.is_displayed()]
+    
+    email_elem = None
+    pass_elem = None
+    
+    for inp in visible_inputs:
+        t = (inp.get_attribute("type") or "").lower()
+        p = (inp.get_attribute("placeholder") or "").lower()
+        n = (inp.get_attribute("name") or "").lower()
+        
+        if not email_elem and (t in ["email", "text"] or "email" in p or "email" in n):
+            email_elem = inp
+        elif not pass_elem and (t == "password" or "senha" in p or "pass" in n):
+            pass_elem = inp
             
-    # 2. Localiza campo de senha
-    pass_input = None
-    for sel in ['input[type="password"]', 'input[placeholder*="senha" i]', 'input[placeholder*="Digite a senha" i]']:
-        elems = driver.find_elements(By.CSS_SELECTOR, sel)
-        if elems and elems[0].is_displayed():
-            pass_input = elems[0]
-            break
+    if not email_elem and len(visible_inputs) >= 1:
+        email_elem = visible_inputs[0]
+    if not pass_elem and len(visible_inputs) >= 2:
+        pass_elem = visible_inputs
 
-    if email_input and pass_input:
-        email_input.click()
-        email_input.clear()
-        email_input.send_keys(email)
+    if email_elem and pass_elem:
+        print("[Robô] Digitando credenciais...")
+        email_elem.click()
+        email_elem.clear()
+        email_elem.send_keys(email)
         time.sleep(0.5)
 
-        pass_input.click()
-        pass_input.clear()
-        pass_input.send_keys(password)
+        pass_elem.click()
+        pass_elem.clear()
+        pass_elem.send_keys(password)
         time.sleep(0.5)
 
-        # 3. Clica no botão verde 'Entrar'
+        # Clica no botão verde 'Entrar'
         clicked = False
-        buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'Entrar') or contains(text(), 'entrar')]")
+        buttons = driver.find_elements(By.XPATH, "//*[translate(normalize-space(text()), 'ENTRAR', 'entrar') = 'entrar']")
         for btn in buttons:
             if btn.is_displayed():
                 driver.execute_script("arguments[0].click();", btn)
@@ -72,16 +86,16 @@ def execute_login(driver, email, password):
                 break
         
         if not clicked:
-            pass_input.send_keys(Keys.RETURN)
+            pass_elem.send_keys(Keys.RETURN)
 
-        # Aguarda a transição para o Dashboard
-        time.sleep(6)
+        print("[Robô] Login submetido. Aguardando carregamento do Dashboard...")
+        time.sleep(7)
 
-        # Salva cookies da sessão logada
+        # Salva cookies da sessão autenticada
         cookies = driver.get_cookies()
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
             json.dump(cookies, f)
-        print("[Robô] Sessão autenticada e cookies salvos.")
+        print("[Robô] Cookies de sessão salvos com sucesso.")
 
 def scrape(email=None, password=None):
     driver = get_driver()
@@ -89,13 +103,10 @@ def scrape(email=None, password=None):
     debug_info = {"url": "", "title": "", "body": "", "error": ""}
     
     try:
-        print(f"[Robô] Acessando {BASE_URL}...")
-        driver.get(BASE_URL)
-        time.sleep(3)
-
-        # Injeta cookies salvos se existirem
+        # 1. Injeta cookies salvos se existirem
         if os.path.exists(COOKIES_FILE):
             try:
+                driver.get("https://viralyze.site")
                 with open(COOKIES_FILE, "r", encoding="utf-8") as f:
                     cookies = json.load(f)
                     for c in cookies:
@@ -104,16 +115,19 @@ def scrape(email=None, password=None):
                 time.sleep(4)
             except Exception as e:
                 print(f"[Robô] Erro cookies: {e}")
+        else:
+            driver.get(LOGIN_URL)
+            time.sleep(3)
 
-        # Se a tela atual for a de login ("Entrar na sua conta"), executa o login
-        page_text = driver.find_element(By.TAG_NAME, "body").text.lower()
-        if "entrar na sua conta" in page_text or "dashboard" not in driver.current_url.lower():
+        # Se não estiver no dashboard, executa o login
+        if "dashboard" not in driver.current_url.lower():
             if not email or not password:
                 raise ValueError("Preencha seu e-mail e senha do Viralyze nos campos acima.")
             execute_login(driver, email, password)
+            driver.get(DASHBOARD_URL)
+            time.sleep(6)
 
-        # Tira print do que o robô vê após o login (para vermos o Dashboard)
-        time.sleep(4)
+        # Salva captura da tela pós-login
         driver.save_screenshot("debug_screen.png")
         debug_info["url"] = driver.current_url
         debug_info["title"] = driver.title
@@ -122,7 +136,7 @@ def scrape(email=None, password=None):
         except:
             debug_info["body"] = "Sem texto capturado."
 
-        # Extrai os cards / tabelas de produtos do Dashboard
+        # Extrai os produtos/vídeos do Dashboard
         selectors = [
             'tbody tr',
             '.product-card',
