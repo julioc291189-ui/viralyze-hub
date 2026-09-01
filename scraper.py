@@ -1,19 +1,15 @@
 import os
 import json
 import asyncio
-import subprocess
 from playwright.async_api import async_playwright
 
 COOKIES_FILE = "cookies.json"
 BASE_URL = "https://viralyze.site"
 DASHBOARD_URL = "https://viralyze.site/dashboard.html"
 
-def ensure_playwright_installed():
-    """Garante que o navegador Chromium está baixado no servidor da nuvem."""
-    try:
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-    except Exception as e:
-        print(f"[Playwright Setup] {e}")
+def install_playwright_browsers():
+    """Garante o download do Chromium no servidor Linux do Streamlit."""
+    os.system("playwright install chromium")
 
 async def login_and_save_cookies(page, email, password):
     """Realiza login no site e salva os cookies localmente."""
@@ -33,12 +29,24 @@ async def login_and_save_cookies(page, email, password):
 
 async def run_viralyze_scraper(email: str = None, password: str = None, headless: bool = True):
     """Executa a raspagem dos produtos em alta no Viralyze."""
-    ensure_playwright_installed()
+    install_playwright_browsers()
     
     results = []
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
-        context = await browser.new_context()
+        # Flags essenciais para rodar no servidor Linux do Streamlit
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process"
+            ]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
 
         # 1. Tenta carregar cookies salvos
         if os.path.exists(COOKIES_FILE):
@@ -56,11 +64,11 @@ async def run_viralyze_scraper(email: str = None, password: str = None, headless
         print(f"[Robô] Acessando {DASHBOARD_URL}...")
         await page.goto(DASHBOARD_URL, wait_until="networkidle")
 
-        # Se foi redirecionado para login, refaz com e-mail e senha
+        # Se foi redirecionado para a tela de login, refaz o login
         if "dashboard" not in page.url:
             if not email or not password:
                 await browser.close()
-                raise ValueError("Sessão expirada. Preencha seu e-mail e senha no painel para conectar.")
+                raise ValueError("Preencha seu E-mail e Senha do Viralyze nos campos acima para o primeiro acesso.")
             await login_and_save_cookies(page, email, password)
             await page.goto(DASHBOARD_URL, wait_until="networkidle")
 
