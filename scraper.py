@@ -5,6 +5,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 
 COOKIES_FILE = "cookies.json"
 BASE_URL = "https://viralyze.site"
@@ -30,17 +31,69 @@ def get_driver():
     
     return webdriver.Chrome(options=options)
 
+def execute_login(driver, email, password):
+    """Preenche os campos exatos do Viralyze e clica no botão Entrar."""
+    print(f"[Robô] Executando login com e-mail: {email}...")
+    
+    # 1. Localiza campo de e-mail
+    email_input = None
+    for sel in ['input[type="email"]', 'input[placeholder*="email" i]', 'input[placeholder*="Digite seu email" i]']:
+        elems = driver.find_elements(By.CSS_SELECTOR, sel)
+        if elems and elems[0].is_displayed():
+            email_input = elems[0]
+            break
+            
+    # 2. Localiza campo de senha
+    pass_input = None
+    for sel in ['input[type="password"]', 'input[placeholder*="senha" i]', 'input[placeholder*="Digite a senha" i]']:
+        elems = driver.find_elements(By.CSS_SELECTOR, sel)
+        if elems and elems[0].is_displayed():
+            pass_input = elems[0]
+            break
+
+    if email_input and pass_input:
+        email_input.click()
+        email_input.clear()
+        email_input.send_keys(email)
+        time.sleep(0.5)
+
+        pass_input.click()
+        pass_input.clear()
+        pass_input.send_keys(password)
+        time.sleep(0.5)
+
+        # 3. Clica no botão verde 'Entrar'
+        clicked = False
+        buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'Entrar') or contains(text(), 'entrar')]")
+        for btn in buttons:
+            if btn.is_displayed():
+                driver.execute_script("arguments[0].click();", btn)
+                clicked = True
+                break
+        
+        if not clicked:
+            pass_input.send_keys(Keys.RETURN)
+
+        # Aguarda a transição para o Dashboard
+        time.sleep(6)
+
+        # Salva cookies da sessão logada
+        cookies = driver.get_cookies()
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            json.dump(cookies, f)
+        print("[Robô] Sessão autenticada e cookies salvos.")
+
 def scrape(email=None, password=None):
+    driver = get_driver()
     results = []
     debug_info = {"url": "", "title": "", "body": "", "error": ""}
-    driver = None
+    
     try:
-        driver = get_driver()
-        print(f"[Robô] Acessando {DASHBOARD_URL}...")
-        driver.get(DASHBOARD_URL)
+        print(f"[Robô] Acessando {BASE_URL}...")
+        driver.get(BASE_URL)
         time.sleep(3)
 
-        # Injeta cookies salvos
+        # Injeta cookies salvos se existirem
         if os.path.exists(COOKIES_FILE):
             try:
                 with open(COOKIES_FILE, "r", encoding="utf-8") as f:
@@ -48,52 +101,28 @@ def scrape(email=None, password=None):
                     for c in cookies:
                         driver.add_cookie(c)
                 driver.get(DASHBOARD_URL)
-                time.sleep(3)
+                time.sleep(4)
             except Exception as e:
                 print(f"[Robô] Erro cookies: {e}")
 
-        # Se não estiver no dashboard, faz login
-        if "dashboard" not in driver.current_url.lower():
-            driver.get(BASE_URL)
-            time.sleep(3)
-            
-            if email and password:
-                inputs = driver.find_elements(By.TAG_NAME, "input")
-                for inp in inputs:
-                    t = (inp.get_attribute("type") or "").lower()
-                    n = (inp.get_attribute("name") or "").lower()
-                    if t == "email" or "email" in n or t == "text":
-                        inp.clear()
-                        inp.send_keys(email)
-                    elif t == "password" or "pass" in n or "senha" in n:
-                        inp.clear()
-                        inp.send_keys(password)
-                
-                buttons = driver.find_elements(By.TAG_NAME, "button")
-                for btn in buttons:
-                    txt = btn.text.lower()
-                    if any(w in txt for w in ["entrar", "login", "acessar", "submit"]):
-                        btn.click()
-                        break
-                time.sleep(5)
-                
-                cookies = driver.get_cookies()
-                with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-                    json.dump(cookies, f)
-                
-                driver.get(DASHBOARD_URL)
-                time.sleep(5)
+        # Se a tela atual for a de login ("Entrar na sua conta"), executa o login
+        page_text = driver.find_element(By.TAG_NAME, "body").text.lower()
+        if "entrar na sua conta" in page_text or "dashboard" not in driver.current_url.lower():
+            if not email or not password:
+                raise ValueError("Preencha seu e-mail e senha do Viralyze nos campos acima.")
+            execute_login(driver, email, password)
 
-        # Informações de diagnóstico
+        # Tira print do que o robô vê após o login (para vermos o Dashboard)
+        time.sleep(4)
+        driver.save_screenshot("debug_screen.png")
         debug_info["url"] = driver.current_url
         debug_info["title"] = driver.title
-        driver.save_screenshot("debug_screen.png")
         try:
             debug_info["body"] = driver.find_element(By.TAG_NAME, "body").text[:800]
         except:
             debug_info["body"] = "Sem texto capturado."
 
-        # Extração dos cards
+        # Extrai os cards / tabelas de produtos do Dashboard
         selectors = [
             'tbody tr',
             '.product-card',
@@ -114,7 +143,7 @@ def scrape(email=None, password=None):
 
         for idx, card in enumerate(cards):
             text_content = card.text.strip()
-            if not text_content or len(text_content) < 8:
+            if not text_content or len(text_content) < 8 or "entrar na sua conta" in text_content.lower():
                 continue
 
             links = card.find_elements(By.TAG_NAME, 'a')
