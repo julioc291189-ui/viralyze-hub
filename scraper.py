@@ -20,7 +20,6 @@ def get_driver():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-    # Localização do Chromium no servidor Linux
     if os.path.exists("/usr/bin/chromium"):
         options.binary_location = "/usr/bin/chromium"
     elif os.path.exists("/usr/bin/chromium-browser"):
@@ -34,40 +33,63 @@ def get_driver():
 
 def login_and_save_cookies(driver, email, password):
     """Realiza login no Viralyze e salva os cookies."""
-    print("[Robô] Acessando tela de login...")
+    print(f"[Robô] Acessando {BASE_URL} para login...")
     driver.get(BASE_URL)
-    time.sleep(3)
+    time.sleep(4)
 
-    # Preenche e-mail e senha
-    email_input = driver.find_element(By.CSS_SELECTOR, 'input[type="email"], input[name="email"], input[placeholder*="email" i]')
-    email_input.clear()
-    email_input.send_keys(email)
+    try:
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        email_field = None
+        pass_field = None
+        
+        for inp in inputs:
+            inp_type = (inp.get_attribute("type") or "").lower()
+            inp_name = (inp.get_attribute("name") or "").lower()
+            inp_placeholder = (inp.get_attribute("placeholder") or "").lower()
+            
+            if not email_field and (inp_type == "email" or "email" in inp_name or "email" in inp_placeholder or inp_type == "text"):
+                email_field = inp
+            elif not pass_field and (inp_type == "password" or "pass" in inp_name or "senha" in inp_placeholder):
+                pass_field = inp
 
-    pass_input = driver.find_element(By.CSS_SELECTOR, 'input[type="password"], input[name="password"]')
-    pass_input.clear()
-    pass_input.send_keys(password)
-
-    # Clica no botão de entrar
-    submit_btn = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"], button')
-    submit_btn.click()
-
-    time.sleep(5)
-
-    # Salva cookies
-    cookies = driver.get_cookies()
-    with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-        json.dump(cookies, f)
-    print("[Robô] Login realizado e cookies salvos.")
+        if email_field and pass_field:
+            email_field.clear()
+            email_field.send_keys(email)
+            pass_field.clear()
+            pass_field.send_keys(password)
+            
+            buttons = driver.find_elements(By.TAG_NAME, "button")
+            clicked = False
+            for btn in buttons:
+                txt = btn.text.lower()
+                if any(w in txt for w in ["entrar", "login", "acessar", "submit"]):
+                    btn.click()
+                    clicked = True
+                    break
+            if not clicked and buttons:
+                buttons[0].click()
+            elif not clicked:
+                pass_field.submit()
+            
+            time.sleep(6)
+            
+            cookies = driver.get_cookies()
+            with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+                json.dump(cookies, f)
+            print("[Robô] Login executado e cookies salvos.")
+    except Exception as e:
+        print(f"[Robô] Erro durante o login: {e}")
 
 def scrape(email=None, password=None):
-    """Executa a raspagem com Selenium."""
+    """Executa a raspagem com Selenium e seletores abrangentes."""
     driver = get_driver()
     results = []
     try:
+        print(f"[Robô] Acessando {DASHBOARD_URL}...")
         driver.get(DASHBOARD_URL)
-        time.sleep(3)
+        time.sleep(4)
 
-        # 1. Injeta cookies se existirem
+        # 1. Injeta cookies salvos
         if os.path.exists(COOKIES_FILE):
             try:
                 with open(COOKIES_FILE, "r", encoding="utf-8") as f:
@@ -75,46 +97,66 @@ def scrape(email=None, password=None):
                     for c in cookies:
                         driver.add_cookie(c)
                 driver.get(DASHBOARD_URL)
-                time.sleep(3)
+                time.sleep(4)
             except Exception as e:
                 print(f"[Robô] Erro ao carregar cookies: {e}")
 
-        # Se não estiver no dashboard, faz login com credenciais
-        if "dashboard" not in driver.current_url.lower():
+        # Se for redirecionado para a tela de login
+        current_url = driver.current_url.lower()
+        if "dashboard" not in current_url:
             if not email or not password:
-                raise ValueError("Preencha seu E-mail e Senha do Viralyze nos campos acima para o primeiro acesso.")
+                raise ValueError("Preencha seu E-mail e Senha no painel para realizar o login.")
             login_and_save_cookies(driver, email, password)
             driver.get(DASHBOARD_URL)
-            time.sleep(3)
+            time.sleep(6)
 
-        # 2. Extrai os cards de produtos
-        cards = driver.find_elements(By.CSS_SELECTOR, '.product-card, .video-card, tr, .card, div[data-product]')
+        # Aguarda renderização completa do JavaScript
+        time.sleep(6)
         
+        # 2. Busca por diferentes estruturas possíveis (tabelas, cards, grids)
+        selectors = [
+            'tbody tr',
+            '.product-card',
+            '.video-card',
+            'div.grid > div',
+            'div[class*="product"]',
+            'div[class*="item"]',
+            'div[class*="card"]',
+            'table tr'
+        ]
+        
+        cards = []
+        for sel in selectors:
+            found = driver.find_elements(By.CSS_SELECTOR, sel)
+            if len(found) > 1:
+                cards = found
+                break
+
         for idx, card in enumerate(cards):
-            text_content = card.text
-            if not text_content or len(text_content.strip()) < 10:
+            text_content = card.text.strip()
+            if not text_content or len(text_content) < 8:
                 continue
 
             links = card.find_elements(By.TAG_NAME, 'a')
             video_url = ""
             for link in links:
                 href = link.get_attribute("href") or ""
-                if "tiktok" in href or "video" in href:
+                if any(domain in href for domain in ["tiktok", "video", "http"]):
                     video_url = href
                     break
 
             categoria = "Outros"
             text_lower = text_content.lower()
-            if any(w in text_lower for w in ["vestido", "calça", "conjunto", "moda", "feminina", "look", "cropped"]):
+            if any(w in text_lower for w in ["vestido", "calça", "conjunto", "moda", "feminina", "look", "cropped", "saia", "blusa"]):
                 categoria = "Moda Feminina"
-            elif any(w in text_lower for w in ["casa", "cozinha", "limpeza", "organizador", "achadinho", "luminária"]):
+            elif any(w in text_lower for w in ["casa", "cozinha", "limpeza", "organizador", "achadinho", "luminária", "quarto", "banheiro"]):
                 categoria = "Achadinhos para Casa"
 
             results.append({
                 "id": f"PROD_{idx+1:03d}",
                 "titulo_bruto": text_content.split("\n")[0][:60],
                 "categoria": categoria,
-                "detalhes": text_content.replace("\n", " | ")[:180],
+                "detalhes": text_content.replace("\n", " | ")[:200],
                 "video_url": video_url,
                 "formato": "POV / Influencer Silenciosa",
                 "score_ia": 8.5
@@ -124,4 +166,3 @@ def scrape(email=None, password=None):
         driver.quit()
 
     return results
-    
