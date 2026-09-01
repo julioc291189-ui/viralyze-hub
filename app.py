@@ -35,13 +35,23 @@ with tab2:
     if st.button("🚀 Iniciar Varredura de Produtos", type="primary"):
         with st.spinner("Robô acessando o Viralyze em segundo plano..."):
             try:
-                data, debug_info = scrape(email=email, password=password)
+                res = scrape(email=email, password=password)
+                if isinstance(res, tuple) and len(res) == 2:
+                    data, debug_info = res
+                elif isinstance(res, list):
+                    data, debug_info = res, {}
+                else:
+                    data, debug_info = [], {}
+                    
                 st.session_state.products = data
                 st.session_state.debug_info = debug_info
-                if data:
+                
+                if debug_info.get("error"):
+                    st.error(f"Aviso no robô: {debug_info['error']}")
+                elif data:
                     st.success(f"Varredura concluída! {len(data)} produtos carregados.")
                 else:
-                    st.warning("Varredura finalizada. Vá até a aba '🔍 Diagnóstico da Tela' para ver o print do que o robô viu.")
+                    st.warning("Varredura finalizada. Vá até a aba '🔍 Diagnóstico da Tela' para ver o print do que o robô encontrou.")
             except Exception as e:
                 st.error(f"Erro na execução: {e}")
 
@@ -49,8 +59,8 @@ with tab4:
     st.subheader("O que o Robô está vendo na tela:")
     if st.session_state.debug_info:
         info = st.session_state.debug_info
-        st.write(f"**URL Acessada:** `{info.get('url')}`")
-        st.write(f"**Título da Página:** `{info.get('title')}`")
+        st.write(f"**URL Acessada:** `{info.get('url', 'N/A')}`")
+        st.write(f"**Título da Página:** `{info.get('title', 'N/A')}`")
         if os.path.exists("debug_screen.png"):
             st.image("debug_screen.png", caption="Print tirado pelo robô no Viralyze", use_container_width=True)
         st.text_area("Texto capturado da página:", value=info.get("body", ""), height=200)
@@ -89,4 +99,3 @@ with tab3:
             if st.button("☁️ Salvar e Sincronizar com Google Drive"):
                 filename = save_local_report(dossier_text)
                 st.success(f"Arquivo '{filename}' gerado com sucesso!")
-                
