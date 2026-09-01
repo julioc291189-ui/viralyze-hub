@@ -33,80 +33,66 @@ def get_driver():
     
     return webdriver.Chrome(options=options)
 
-def fill_input(driver, element, value):
-    """Preenche o campo garantindo que eventos do React/Vue sejam disparados."""
-    try:
-        element.click()
-        element.clear()
-        element.send_keys(value)
-    except:
-        pass
-    # Injeta via JS caso seja campo controlado por framework
-    driver.execute_script("""
-        var el = arguments[0];
-        var val = arguments;
-        el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-    """, element, value)
-
 def execute_login(driver, email, password):
-    """Acessa a tela de login, preenche os dados e clica em Entrar."""
+    """Injeta credenciais diretamente no DOM via JavaScript e submete."""
     print(f"[Robô] Acessando {LOGIN_URL}...")
     driver.get(LOGIN_URL)
     
     wait = WebDriverWait(driver, 15)
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "input")))
-    time.sleep(2)
+    time.sleep(3)
 
-    all_inputs = driver.find_elements(By.TAG_NAME, "input")
-    visible_inputs = [inp for inp in all_inputs if inp.is_displayed()]
-    
-    email_elem = None
-    pass_elem = None
-    
-    for inp in visible_inputs:
-        t = (inp.get_attribute("type") or "").lower()
-        p = (inp.get_attribute("placeholder") or "").lower()
-        n = (inp.get_attribute("name") or "").lower()
+    # Injeção direta de JavaScript para preencher e clicar no botão
+    driver.execute_script("""
+        var userEmail = arguments[0];
+        var userPass = arguments;
         
-        if not email_elem and (t in ["email", "text"] or "email" in p or "email" in n):
-            email_elem = inp
-        elif not pass_elem and (t == "password" or "senha" in p or "pass" in n):
-            pass_elem = inp
-            
-    if not email_elem and len(visible_inputs) >= 1:
-        email_elem = visible_inputs[0]
-    if not pass_elem and len(visible_inputs) >= 2:
-        pass_elem = visible_inputs
-
-    if email_elem and pass_elem:
-        print("[Robô] Preenchendo credenciais...")
-        fill_input(driver, email_elem, email)
-        time.sleep(0.5)
-        fill_input(driver, pass_elem, password)
-        time.sleep(0.5)
-
-        # Clica no botão 'Entrar'
-        clicked = False
-        buttons = driver.find_elements(By.XPATH, "//*[translate(normalize-space(text()), 'ENTRAR', 'entrar') = 'entrar']")
-        for btn in buttons:
-            if btn.is_displayed():
-                driver.execute_script("arguments[0].click();", btn)
-                clicked = True
-                break
+        var inputs = Array.from(document.querySelectorAll('input')).filter(i => i.type !== 'hidden');
+        var emailInput = document.querySelector('input[type="email"]') || inputs[0];
+        var passInput = document.querySelector('input[type="password"]') || inputs;
         
-        if not clicked:
-            pass_elem.send_keys(Keys.RETURN)
+        if (emailInput) {
+            emailInput.focus();
+            emailInput.value = userEmail;
+            emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+            emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        
+        if (passInput) {
+            passInput.focus();
+            passInput.value = userPass;
+            passInput.dispatchEvent(new Event('input', { bubbles: true }));
+            passInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        
+        var allButtons = Array.from(document.querySelectorAll('button, input[type="submit"], a, div'));
+        var btn = allButtons.find(b => b.innerText && b.innerText.trim().toLowerCase() === 'entrar');
+        if (btn) {
+            btn.click();
+        } else {
+            var form = document.querySelector('form');
+            if (form) form.submit();
+        }
+    """, email, password)
 
-        print("[Robô] Login submetido. Aguardando Dashboard...")
-        time.sleep(8)
+    try:
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        if len(inputs) > 1:
+            inputs.send_keys(Keys.RETURN)
+    except:
+        pass
 
-        # Salva cookies
+    print("[Robô] Login submetido via JS. Aguardando Dashboard...")
+    time.sleep(8)
+
+    # Salva cookies
+    try:
         cookies = driver.get_cookies()
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
             json.dump(cookies, f)
         print("[Robô] Cookies salvos.")
+    except Exception as e:
+        print(f"[Robô] Erro cookies: {e}")
 
 def scrape(email=None, password=None):
     driver = get_driver()
@@ -114,7 +100,7 @@ def scrape(email=None, password=None):
     debug_info = {"url": "", "title": "", "body": "", "error": ""}
     
     try:
-        # Injeta cookies salvos se existirem
+        # 1. Injeta cookies salvos
         if os.path.exists(COOKIES_FILE):
             try:
                 driver.get("https://viralyze.site")
@@ -130,7 +116,7 @@ def scrape(email=None, password=None):
             driver.get(LOGIN_URL)
             time.sleep(3)
 
-        # Se ainda estiver na tela de login, faz o login
+        # Se ainda estiver na tela de login, executa login
         if "dashboard" not in driver.current_url.lower():
             if not email or not password:
                 raise ValueError("Preencha seu e-mail e senha do Viralyze nos campos acima.")
@@ -148,7 +134,7 @@ def scrape(email=None, password=None):
         except:
             debug_info["body"] = "Sem texto capturado."
 
-        # Extrai os cards de produtos do Dashboard
+        # Extrai os produtos do Dashboard
         selectors = [
             'tbody tr',
             '.product-card',
@@ -205,4 +191,4 @@ def scrape(email=None, password=None):
             driver.quit()
 
     return results, debug_info
-                
+    
